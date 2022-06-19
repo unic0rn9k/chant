@@ -2,21 +2,20 @@
 
 use anyhow::*;
 
+const OPERATOR_CHARS: &str = ":=+-/*^&%|<>!";
+const SEPARATOR_CHARS: &str = ",.(){}[]";
+
 /// A basic token type.
 ///
-/// The Blank token should always be ignored, except when dealing with operators.
-///
-/// Any operator consisten of multiple Singlet's should be parsed into the sequence of Singlet's,
-/// followed by the Blank token.
-///
-/// ++ should be Singlet('+'), Singlet('+'), Blank
+/// The Blank token should always be ignored.
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub enum Token {
     Symbol(String),
     Number(isize),
     String(String),
+    Operator(String),
+    Separator(char),
     Blank,
-    Singlet(char),
 }
 
 impl Token {
@@ -105,6 +104,27 @@ impl SpecialParser for Symbol {
     }
 }
 
+pub struct Operator;
+
+impl SpecialParser for Operator {
+    fn parse(i: &str) -> Result<(Token, usize)> {
+        let mut rem = 0;
+
+        for c in i.chars(){
+            if !OPERATOR_CHARS.contains(c){
+                break
+            }
+            rem += 1
+        }
+
+        if rem == 0{
+            return Ok((Token::Blank, 0))
+        }
+
+        Ok((Token::Operator((&i[0..rem]).to_string()), rem))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::parser::*;
@@ -126,6 +146,12 @@ mod tests {
     fn symbol() -> Result<()>{
         assert_eq!(Symbol::parse("_oki123")?, (Token::Symbol("_oki123".to_string()), 7));
         assert_eq!(Symbol::parse("1_oki123")?.0, Token::Blank);
+        Ok(())
+    }
+
+    #[test]
+    fn op() -> Result<()>{
+        assert_eq!(Operator::parse("+=")?, (Token::Operator("+=".to_string()), 2));
         Ok(())
     }
 }
