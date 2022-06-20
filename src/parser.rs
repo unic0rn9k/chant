@@ -1,8 +1,7 @@
 //! Parser combinator, implemented in rust, for the chant programming language
 
-use std::marker::PhantomData;
-
 use anyhow::*;
+use std::marker::PhantomData;
 
 const OPERATOR_CHARS: &str = ":=+-/*^&%|<>!";
 const SEPARATOR_CHARS: &str = ",.(){}[]";
@@ -18,7 +17,6 @@ pub enum Token {
     Operator(String),
     Separator(char),
     Blank,
-    Then(Box<Token>, Box<Token>),
 }
 
 impl Token {
@@ -36,13 +34,16 @@ impl Token {
 /// # Results
 /// The parser should return a token, and the index for the remainding (unparsed) part of the input string.
 pub trait Combinator {
-    fn parse(input: &str) -> Result<(Token, usize)>;
+    type Token;
+    fn parse(input: &str) -> Result<(Self::Token, usize)>;
 }
 
 /// Parser for unsigned ints (list of digits)
 pub struct NaturalNumber;
 
 impl Combinator for NaturalNumber {
+    type Token = Token;
+
     fn parse(i: &str) -> Result<(Token, usize)> {
         let mut num = 0;
         let mut rem = 0;
@@ -64,6 +65,8 @@ impl Combinator for NaturalNumber {
 pub struct Integer;
 
 impl Combinator for Integer {
+    type Token = Token;
+
     fn parse(i: &str) -> Result<(Token, usize)> {
         if i.chars().nth(0) == Some('-') {
             let mut n = NaturalNumber::parse(&i[1..])?;
@@ -79,6 +82,8 @@ impl Combinator for Integer {
 pub struct Symbol;
 
 impl Combinator for Symbol {
+    type Token = Token;
+
     fn parse(i: &str) -> Result<(Token, usize)> {
         let mut buffer = vec![];
         let mut i = i.chars();
@@ -110,6 +115,8 @@ impl Combinator for Symbol {
 pub struct Operator;
 
 impl Combinator for Operator {
+    type Token = Token;
+
     fn parse(i: &str) -> Result<(Token, usize)> {
         let mut rem = 0;
 
@@ -128,13 +135,30 @@ impl Combinator for Operator {
     }
 }
 
+pub struct Separator;
+
+impl Combinator for Separator {
+    type Token = Token;
+
+    fn parse(i: &str) -> Result<(Self::Token, usize)> {
+        let c = i.chars().nth(0).unwrap();
+        if !SEPARATOR_CHARS.contains(c) {
+            Ok((Token::Blank, 0))
+        } else {
+            Ok((Token::Separator(c), 1))
+        }
+    }
+}
+
 pub struct Then<A: Combinator, B: Combinator>(PhantomData<A>, PhantomData<B>);
 
 impl<A: Combinator, B: Combinator> Combinator for Then<A, B> {
-    fn parse(i: &str) -> Result<(Token, usize)> {
+    type Token = (A::Token, B::Token);
+
+    fn parse(i: &str) -> Result<(Self::Token, usize)> {
         let a = A::parse(i)?;
         let b = B::parse(&i[a.1..])?;
-        Ok((Token::Then(Box::new(a.0), Box::new(b.0)), a.1 + b.1))
+        Ok(((a.0, b.0), a.1 + b.1))
     }
 }
 
@@ -175,15 +199,15 @@ mod tests {
     fn symbol_then_num() -> Result<()> {
         assert_eq!(
             Then::<Integer, Symbol>::parse("123abc")?,
-            (
-                Token::Then(
-                    Box::new(Token::Number(123)),
-                    Box::new(Token::Symbol("abc".to_string())),
-                ),
-                6
-            )
+            ((Token::Number(123), Token::Symbol("abc".to_string()),), 6)
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn sep() -> Result<()> {
+        assert_eq!(Separator::parse("(())")?, (Token::Separator('('), 1));
         Ok(())
     }
 }
