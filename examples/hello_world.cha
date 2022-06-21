@@ -1,0 +1,5 @@
+import std.println;
+
+function main() {
+    println("Hello World");
+}
