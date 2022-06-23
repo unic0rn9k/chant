@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn symbol_then_num() -> Result<()> {
         assert_eq!(
-            Then(Symbol, EatWhitespace(Integer)).parse("abc 123")?,
+            Symbol.then(Integer.eat_whitespace()).parse("abc 123")?,
             ((Token::Symbol("abc".to_string()), Token::Number(123)), 7)
         );
 
