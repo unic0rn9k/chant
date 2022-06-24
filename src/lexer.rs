@@ -2,7 +2,7 @@ use std::iter::Peekable;
 use std::ops::Deref;
 use std::str::Chars;
 
-use crate::parser::Parser;
+use crate::parser::{character, take_while, Parser};
 
 pub enum BinaryOp {
     /// `+`
@@ -118,8 +118,8 @@ pub struct Token<'a> {
 
 pub struct Tokens<'a>(Vec<Token<'a>>);
 
-fn tokenize(input: &str) -> Result<Tokens, ()> {
-    // let whitespace = take_while(character(' ')).parse("");
-
-    todo!()
+pub fn tokenize(input: &str) -> Result<Tokens, ()> {
+    let whitespace = take_while(character(' ')).parse("        ".chars());
+    println!("{whitespace:?}");
+    Err(())
 }

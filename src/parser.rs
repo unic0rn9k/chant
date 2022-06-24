@@ -37,11 +37,13 @@ impl<I, O, A: Parser<I, O>> Parser<I, Vec<O>> for TakeWhile<A> {
     fn parse<'a, Iter: Iterator<Item = I>>(&'a self, mut input: Iter) -> ParseResult<Iter, Vec<O>> {
         let mut values = Vec::new();
         while let Some(input) = input.next() {
-            self.0.parse(input)
+            match self.0.parse([input].into_iter()) {
+                Ok((_, o)) => values.push(o),
+                _ => todo!(),
+            }
         }
 
-        // Ok((&input, values))
-        todo!()
+        Ok((input, values))
     }
 }
 
@@ -49,20 +51,20 @@ pub fn take_while<I, O, A: Parser<I, O>>(a: A) -> TakeWhile<A> {
     TakeWhile(a)
 }
 
-// pub struct Char(char);
+pub struct Char(char);
 
-// impl<'b> Parser<&'b str, ()> for Char {
-//     fn parse<'a>(&'a self, input: &'b str) -> ParseResult<&'b str, ()> {
-//         match input.chars().next().contains(&self.0) {
-//             true => Ok((&&input[self.0.len_utf8()..], ())),
-//             _ => Err(()),
-//         }
-//     }
-// }
+impl<'b> Parser<char, ()> for Char {
+    fn parse<Iter: Iterator<Item = char>>(&self, mut input: Iter) -> ParseResult<Iter, ()> {
+        match input.next() {
+            Some(c) if c == self.0 => Ok((input, ())),
+            _ => Err(()),
+        }
+    }
+}
 
-// pub fn character(c: char) -> Char {
-//     Char(c)
-// }
+pub fn character(c: char) -> Char {
+    Char(c)
+}
 // #[derive(Clone, Copy)]
 // pub struct Literal<I>(I);
 
