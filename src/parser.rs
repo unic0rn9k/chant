@@ -8,12 +8,10 @@ const SEPARATOR_CHARS: &str = ",.(){}[]";
 const WHITESPACE_CHARS: &str = " \t\n";
 
 /// A basic token type.
-///
-/// The Blank token should always be ignored.
-#[derive(Eq, PartialEq, Clone, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum Token {
     Symbol(String),
-    Number(isize),
+    Number(f64),
     String(String),
     Operator(String),
     Separator(char),
@@ -21,7 +19,7 @@ pub enum Token {
 }
 
 impl Token {
-    fn number(&mut self) -> &mut isize {
+    fn number(&mut self) -> &mut f64 {
         if let Token::Number(n) = self {
             n
         } else {
@@ -34,37 +32,47 @@ impl Token {
 ///
 /// # Results
 /// The parser should return a token, and the index for the remainding (unparsed) part of the input string.
-pub trait Combinator {
+///
+/// For parsers that return `Token`, `Blank` should be returned when the parser (Self) is not
+/// applicable to the input.
+pub trait Parser {
     type Token;
     fn parse(&self, input: &str) -> Result<(Self::Token, usize)>;
 
-    fn then<A: Combinator>(self, other: A) -> Then<Self, A>
+    fn then<A: Parser>(self, other: A) -> Then<Self, A>
     where
         Self: Sized,
     {
         Then(self, other)
     }
 
-    fn eat_whitespace(self) -> EatWhitespace<Self>
+    fn after_whitespace(self) -> EatPrecedingWhitespace<Self>
     where
         Self: Sized,
     {
-        EatWhitespace(self)
+        EatPrecedingWhitespace(self)
+    }
+
+    fn if_literal(self, literal: &str) -> IfLiteral<Self>
+    where
+        Self: Sized,
+    {
+        IfLiteral(self, literal.to_string())
     }
 }
 
 /// Parser for unsigned ints (list of digits)
 pub struct NaturalNumber;
 
-impl Combinator for NaturalNumber {
+impl Parser for NaturalNumber {
     type Token = Token;
 
     fn parse(&self, i: &str) -> Result<(Token, usize)> {
-        let mut num = 0;
+        let mut num = 0.;
         let mut rem = 0;
         for c in i.chars() {
-            match format!("{c}").parse::<usize>() {
-                std::result::Result::Ok(n) => num = num * 10 + n as isize,
+            match format!("{c}").parse::<u8>() {
+                std::result::Result::Ok(n) => num = num * 10. + n as f64,
                 Err(_) => break,
             }
             rem += 1;
@@ -79,13 +87,17 @@ impl Combinator for NaturalNumber {
 /// Parser for any integer (list of digits, that might be pre-pended with '-')
 pub struct Integer;
 
-impl Combinator for Integer {
+impl Parser for Integer {
     type Token = Token;
 
     fn parse(&self, i: &str) -> Result<(Token, usize)> {
         if i.chars().nth(0) == Some('-') {
             let mut n = NaturalNumber.parse(&i[1..])?;
-            *n.0.number() *= -1;
+            if let Token::Number(n) = &mut n.0 {
+                *n *= -1.;
+            } else {
+                return Ok((Token::Blank, 0));
+            }
             n.1 += 1;
             Ok(n)
         } else {
@@ -94,9 +106,33 @@ impl Combinator for Integer {
     }
 }
 
+pub struct Float;
+
+impl Parser for Float {
+    type Token = Token;
+
+    fn parse(&self, i: &str) -> Result<(Token, usize)> {
+        let mut num = Integer.parse(i)?;
+        if i.chars().nth(num.1) != Some('.') {
+            return Ok(num);
+        }
+        if num.0 == Token::Blank {
+            num.0 = Token::Number(0.)
+        }
+        let mut decimalps = NaturalNumber.parse(&i[num.1 + 1..])?;
+        if decimalps.0 == Token::Blank {
+            return Ok(num);
+        }
+        *num.0.number() += *decimalps.0.number() / (10usize.pow(decimalps.1 as u32)) as f64
+            * num.0.number().signum();
+        num.1 += 1 + decimalps.1;
+        Ok(num)
+    }
+}
+
 pub struct Symbol;
 
-impl Combinator for Symbol {
+impl Parser for Symbol {
     type Token = Token;
 
     fn parse(&self, i: &str) -> Result<(Token, usize)> {
@@ -129,7 +165,7 @@ impl Combinator for Symbol {
 
 pub struct Operator;
 
-impl Combinator for Operator {
+impl Parser for Operator {
     type Token = Token;
 
     fn parse(&self, i: &str) -> Result<(Token, usize)> {
@@ -152,7 +188,7 @@ impl Combinator for Operator {
 
 pub struct Separator;
 
-impl Combinator for Separator {
+impl Parser for Separator {
     type Token = Token;
 
     fn parse(&self, i: &str) -> Result<(Self::Token, usize)> {
@@ -165,9 +201,9 @@ impl Combinator for Separator {
     }
 }
 
-pub struct Then<A: Combinator, B: Combinator>(A, B);
+pub struct Then<A: Parser, B: Parser>(A, B);
 
-impl<A: Combinator, B: Combinator> Combinator for Then<A, B> {
+impl<A: Parser, B: Parser> Parser for Then<A, B> {
     type Token = (A::Token, B::Token);
 
     fn parse(&self, i: &str) -> Result<(Self::Token, usize)> {
@@ -177,9 +213,9 @@ impl<A: Combinator, B: Combinator> Combinator for Then<A, B> {
     }
 }
 
-pub struct EatWhitespace<A: Combinator>(A);
+pub struct EatPrecedingWhitespace<A: Parser>(A);
 
-impl<A: Combinator> Combinator for EatWhitespace<A> {
+impl<A: Parser> Parser for EatPrecedingWhitespace<A> {
     type Token = A::Token;
 
     fn parse(&self, i: &str) -> Result<(A::Token, usize)> {
@@ -197,17 +233,32 @@ impl<A: Combinator> Combinator for EatWhitespace<A> {
     }
 }
 
+pub struct IfLiteral<A: Parser>(A, String);
+
+impl<A: Parser> Parser for IfLiteral<A> {
+    type Token = Option<A::Token>;
+
+    fn parse(&self, i: &str) -> Result<(Self::Token, usize)> {
+        if i.len() < self.1.len() || i[0..self.1.len()] != self.1 {
+            Ok((None, 0))
+        } else {
+            let res = self.0.parse(&i[self.1.len()..])?;
+            Ok((Some(res.0), res.1 + self.1.len()))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::parser::*;
 
     #[test]
     fn int() -> Result<()> {
-        assert_eq!(NaturalNumber.parse("123")?, (Token::Number(123), 3));
+        assert_eq!(NaturalNumber.parse("123")?, (Token::Number(123.), 3));
         assert_eq!(NaturalNumber.parse("-123")?.0, Token::Blank);
-        assert_eq!(Integer.parse("-123")?, (Token::Number(-123), 4));
-        assert_eq!(Integer.parse("123")?, (Token::Number(123), 3));
-        assert_eq!(Integer.parse("123abc")?, (Token::Number(123), 3));
+        assert_eq!(Integer.parse("-123")?, (Token::Number(-123.), 4));
+        assert_eq!(Integer.parse("123")?, (Token::Number(123.), 3));
+        assert_eq!(Integer.parse("123abc")?, (Token::Number(123.), 3));
         Ok(())
     }
 
@@ -234,7 +285,7 @@ mod tests {
     fn num_then_symbol() -> Result<()> {
         assert_eq!(
             Then(Integer, Symbol).parse("123abc")?,
-            ((Token::Number(123), Token::Symbol("abc".to_string()),), 6)
+            ((Token::Number(123.), Token::Symbol("abc".to_string())), 6)
         );
 
         Ok(())
@@ -243,8 +294,8 @@ mod tests {
     #[test]
     fn symbol_then_num() -> Result<()> {
         assert_eq!(
-            Symbol.then(Integer.eat_whitespace()).parse("abc 123")?,
-            ((Token::Symbol("abc".to_string()), Token::Number(123)), 7)
+            Symbol.then(Integer.after_whitespace()).parse("abc 123")?,
+            ((Token::Symbol("abc".to_string()), Token::Number(123.)), 7)
         );
 
         Ok(())
@@ -253,6 +304,28 @@ mod tests {
     #[test]
     fn sep() -> Result<()> {
         assert_eq!(Separator.parse("(())")?, (Token::Separator('('), 1));
+        Ok(())
+    }
+
+    #[test]
+    fn oneline_float_parser() -> Result<()> {
+        let float = Integer.then(NaturalNumber.if_literal("."));
+
+        assert_eq!(float.parse("123")?, ((Token::Number(123.), None), 3));
+        assert_eq!(
+            float.parse("-123.456")?,
+            ((Token::Number(-123.), Some(Token::Number(456.))), 8)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn floats() -> Result<()> {
+        assert_eq!(Float.parse("-123.456")?, (Token::Number(-123.456), 8));
+        assert_eq!(Float.parse("123")?, (Token::Number(123.), 3));
+        assert_eq!(Float.parse("123.")?, (Token::Number(123.), 3));
+        assert_eq!(Float.parse(".456")?, (Token::Number(0.456), 4));
+        assert_eq!(Float.parse("-.456")?, (Token::Blank, 0));
         Ok(())
     }
 }
