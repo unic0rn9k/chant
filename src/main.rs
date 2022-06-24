@@ -9,14 +9,14 @@
 //! - Manual Memory management
 //! - Lifetimes
 //! - Const-evaluation
+#![feature(iter_advance_by)]
+#![feature(option_result_contains)]
 
 mod lexer;
 mod parser;
 
-use lexer::tokenize;
-
 fn main() {
-    let input = "    d";
-    let tokens = tokenize(input);
-    println!("{tokens:?}");
+    // let input = " ";
+    // let tokens = tokenize(input);
+    // println!("{tokens:?}");
 }
