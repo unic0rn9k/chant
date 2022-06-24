@@ -119,7 +119,7 @@ pub struct Token<'a> {
 pub struct Tokens<'a>(Vec<Token<'a>>);
 
 pub fn tokenize(input: &str) -> Result<Tokens, ()> {
-    let whitespace = take_while(character(' ')).parse("        ".chars());
+    let whitespace = take_while(character(' ')).parse(input.chars());
     println!("{whitespace:?}");
     Err(())
 }
