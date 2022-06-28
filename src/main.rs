@@ -1,16 +1,21 @@
-//! # Strong mathematical numerical type system
+//! # TODO
+//!
+//! ## Strong mathematical numerical type system
 //! - Natural numbers  (unsigned int)
 //! - Integer          (signed int)
 //! - Real numbers     (float)
 //! - Complex
 //! - Fast floats
 //!
+//! ## Misc
 //! - Co-routines
 //! - Manual Memory management
 //! - Lifetimes
 //! - Const-evaluation
-#![feature(iter_advance_by)]
-#![feature(option_result_contains)]
+//! - multiple dispatch (traits)
+
+//#![feature(iter_advance_by)]
+//#![feature(option_result_contains)]
 
 use lexer::tokenize;
 

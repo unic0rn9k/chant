@@ -1,6 +1,6 @@
-use std::iter::Peekable;
-use std::ops::Deref;
-use std::str::Chars;
+//use std::iter::Peekable;
+//use std::ops::Deref;
+//use std::str::Chars;
 
 use crate::parser::{character, take_while, Parser};
 
@@ -45,15 +45,10 @@ pub enum Delim {
     Bracket,
 }
 
-pub enum LiteralKind {
-    String,
-    Integer,
-    Float,
-}
-
-pub struct Literal<'a> {
-    kind: LiteralKind,
-    val: &'a str,
+pub enum Literal {
+    String(String),
+    Integer(isize),
+    Float(f64),
 }
 
 pub struct Ident<'a> {
@@ -72,7 +67,7 @@ pub enum TokenKind<'a> {
     /// Any close delimiter.
     CloseDelim(Delim),
     /// Any literal
-    Literal(Literal<'a>),
+    Literal(Literal),
     /// Any identifier
     Ident(Ident<'a>),
     /// `=`

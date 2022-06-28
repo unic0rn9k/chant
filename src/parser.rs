@@ -1,31 +1,79 @@
 //! Parser combinator, implemented in rust, for the chant programming language
 
-use anyhow::*;
+//use anyhow::*;
 use std::marker::PhantomData;
 
 const OPERATOR_CHARS: &str = ":=+-/*^&%|<>!";
 const SEPARATOR_CHARS: &str = ",.(){}[]";
 const WHITESPACE_CHARS: &str = " \t\n";
 
-/// A basic token type.
-#[derive(PartialEq, Clone, Debug)]
-pub enum Token {
-    Symbol(String),
-    Number(f64),
-    String(String),
-    Operator(String),
-    Separator(char),
-    Blank,
+use crate::lexer::*;
+
+pub type ParseResult<'a, I, O> = Result<(I, O), ()>;
+
+pub trait Parser<I, O>: Sized {
+    /// The `I` returned should be a continuation of the input, where the items parsed have been removed.
+    /// If `I` is an iter, the input can simply be returned at the end of the function.
+    fn parse(&self, input: I) -> ParseResult<I, O>;
+
+    fn map<U, F: Fn(O) -> U>(self, f: F) -> Map<Self, O, F> {
+        Map(self, f, PhantomData)
+    }
+
+    fn to<U>(self, u: U) -> To<Self, O, U> {
+        To(self, u, PhantomData)
+    }
 }
 
-impl Token {
-    fn number(&mut self) -> &mut f64 {
-        if let Token::Number(n) = self {
-            n
-        } else {
-            panic!("{self:?} is not a number")
+pub struct Map<A, O, F>(A, F, PhantomData<O>);
+
+impl<Item, I: Iterator<Item = Item>, O, A: Parser<I, O>, U, F: Fn(O) -> U> Parser<I, U>
+    for Map<A, O, F>
+{
+    fn parse(&self, input: I) -> ParseResult<I, U> {
+        self.0.parse(input).map(|(i, o)| (i, self.1(o)))
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct To<A, O, U>(A, U, PhantomData<O>);
+
+impl<Item, I: Iterator<Item = Item>, O, U: Clone, A: Parser<I, O>> Parser<I, U> for To<A, O, U> {
+    fn parse(&self, input: I) -> ParseResult<I, U> {
+        self.0.parse(input).map(|(i, _)| (i, self.1.clone()))
+    }
+}
+
+pub struct TakeWhile<A>(A);
+
+impl<Item, I: Iterator<Item = Item>, O, A: Parser<Item, O>> Parser<I, Vec<O>> for TakeWhile<A> {
+    fn parse(&self, mut input: I) -> ParseResult<I, Vec<O>> {
+        let mut values = Vec::new();
+        for item in input {
+            values.push(self.0.parse(item)?.1);
+        }
+
+        Ok((input, values))
+    }
+}
+
+pub fn take_while<I, O, A: Parser<I, O>>(a: A) -> TakeWhile<A> {
+    TakeWhile(a)
+}
+
+pub struct Char(char);
+
+impl<I: Iterator<Item = char>> Parser<I, char> for Char {
+    fn parse(&self, mut input: I) -> ParseResult<I, char> {
+        match input.next() {
+            Some(c) if c == self.0 => Ok((input, c)),
+            _ => Err(()),
         }
     }
+}
+
+pub fn character(c: char) -> Char {
+    Char(c)
 }
 
 /// Parser specialized for a specific use case. For example this could be a parser that only parses math expressions.
@@ -35,39 +83,37 @@ impl Token {
 ///
 /// For parsers that return `Token`, `Blank` should be returned when the parser (Self) is not
 /// applicable to the input.
-pub trait Parser {
-    type Token;
-    fn parse(&self, input: &str) -> Result<(Self::Token, usize)>;
-
-    fn then<A: Parser>(self, other: A) -> Then<Self, A>
-    where
-        Self: Sized,
-    {
-        Then(self, other)
-    }
-
-    fn after_whitespace(self) -> EatPrecedingWhitespace<Self>
-    where
-        Self: Sized,
-    {
-        EatPrecedingWhitespace(self)
-    }
-
-    fn if_literal(self, literal: &str) -> IfLiteral<Self>
-    where
-        Self: Sized,
-    {
-        IfLiteral(self, literal.to_string())
-    }
-}
+//pub trait Parser {
+//    type Token;
+//    fn parse(&self, input: &str) -> Result<(Self::Token, usize)>;
+//
+//    fn then<A: Parser>(self, other: A) -> Then<Self, A>
+//    where
+//        Self: Sized,
+//    {
+//        Then(self, other)
+//    }
+//
+//    fn after_whitespace(self) -> EatPrecedingWhitespace<Self>
+//    where
+//        Self: Sized,
+//    {
+//        EatPrecedingWhitespace(self)
+//    }
+//
+//    fn if_literal(self, literal: &str) -> IfLiteral<Self>
+//    where
+//        Self: Sized,
+//    {
+//        IfLiteral(self, literal.to_string())
+//    }
+//}
 
 /// Parser for unsigned ints (list of digits)
 pub struct NaturalNumber;
 
-impl Parser for NaturalNumber {
-    type Token = Token;
-
-    fn parse(&self, i: &str) -> Result<(Token, usize)> {
+impl<'a> Parser<&'a str, Token<'a>> for NaturalNumber {
+    fn parse(&self, i: &'a str) -> ParseResult<&'a str, Token<'a>> {
         let mut num = 0.;
         let mut rem = 0;
         for c in i.chars() {
@@ -78,22 +124,27 @@ impl Parser for NaturalNumber {
             rem += 1;
         }
         if rem == 0 {
-            return Ok((Token::Blank, 0));
+            return Err(());
         }
-        Ok((Token::Number(num), rem))
+
+        Ok((
+            &i[rem..],
+            Token {
+                kind: TokenKind::Literal(Literal::Float(num)),
+                len: rem,
+            },
+        ))
     }
 }
 
 /// Parser for any integer (list of digits, that might be pre-pended with '-')
 pub struct Integer;
 
-impl Parser for Integer {
-    type Token = Token;
-
-    fn parse(&self, i: &str) -> Result<(Token, usize)> {
+impl<'a> Parser<&'a str, Token<'a>> for Integer {
+    fn parse(&self, i: &'a str) -> ParseResult<&'a str, Token<'a>> {
         if i.chars().nth(0) == Some('-') {
             let mut n = NaturalNumber.parse(&i[1..])?;
-            if let Token::Number(n) = &mut n.0 {
+            if let TokenKind::Literal(Literal::Float(num)) = &mut n.0 {
                 *n *= -1.;
             } else {
                 return Ok((Token::Blank, 0));
@@ -108,10 +159,8 @@ impl Parser for Integer {
 
 pub struct Float;
 
-impl Parser for Float {
-    type Token = Token;
-
-    fn parse(&self, i: &str) -> Result<(Token, usize)> {
+impl<'a> Parser<&'a str, Token<'a>> for Float {
+    fn parse(&self, i: &str) -> ParseResult<&str, Token> {
         let mut num = Integer.parse(i)?;
         if i.chars().nth(num.1) != Some('.') {
             return Ok(num);
@@ -132,10 +181,8 @@ impl Parser for Float {
 
 pub struct Symbol;
 
-impl Parser for Symbol {
-    type Token = Token;
-
-    fn parse(&self, i: &str) -> Result<(Token, usize)> {
+impl<'a> Parser<&'a str, Token<'a>> for Symbol {
+    fn parse(&self, i: &str) -> ParseResult<&str, Token> {
         let mut buffer = vec![];
         let mut i = i.chars();
 
@@ -165,10 +212,8 @@ impl Parser for Symbol {
 
 pub struct Operator;
 
-impl Parser for Operator {
-    type Token = Token;
-
-    fn parse(&self, i: &str) -> Result<(Token, usize)> {
+impl<'a> Parser<&'a str, Token<'a>> for Operator {
+    fn parse(&self, i: &str) -> ParseResult<&str, Token> {
         let mut rem = 0;
 
         for c in i.chars() {
@@ -188,10 +233,8 @@ impl Parser for Operator {
 
 pub struct Separator;
 
-impl Parser for Separator {
-    type Token = Token;
-
-    fn parse(&self, i: &str) -> Result<(Self::Token, usize)> {
+impl<'a> Parser<&'a str, Token<'a>> for Separator {
+    fn parse(&self, i: &str) -> ParseResult<&str, Token> {
         let c = i.chars().nth(0).unwrap();
         if !SEPARATOR_CHARS.contains(c) {
             Ok((Token::Blank, 0))
@@ -201,24 +244,26 @@ impl Parser for Separator {
     }
 }
 
-pub struct Then<A: Parser, B: Parser>(A, B);
+pub struct Then<I, AO, BO, A: Parser<I, AO>, B: Parser<I, BO>>(
+    A,
+    B,
+    PhantomData<I>,
+    PhantomData<AO>,
+    PhantomData<BO>,
+);
 
-impl<A: Parser, B: Parser> Parser for Then<A, B> {
-    type Token = (A::Token, B::Token);
-
-    fn parse(&self, i: &str) -> Result<(Self::Token, usize)> {
+impl<I, AO, BO, A: Parser<I, AO>, B: Parser<I, BO>> Parser<I, (AO, BO)> for Then<I, AO, BO, A, B> {
+    fn parse(&self, i: I) -> ParseResult<I, (AO, BO)> {
         let a = self.0.parse(i)?;
-        let b = self.1.parse(&i[a.1..])?;
-        Ok(((a.0, b.0), a.1 + b.1))
+        let b = self.1.parse(a.0)?;
+        Ok((b.0, (a.1, b.1)))
     }
 }
 
-pub struct EatPrecedingWhitespace<A: Parser>(A);
+pub struct EatPrecedingWhitespace<'a, AO, A: Parser<&'a str, AO>>(A, &'a PhantomData<AO>);
 
-impl<A: Parser> Parser for EatPrecedingWhitespace<A> {
-    type Token = A::Token;
-
-    fn parse(&self, i: &str) -> Result<(A::Token, usize)> {
+impl<'a, AO, A: Parser<&'a str, AO>> Parser<&'a str, AO> for EatPrecedingWhitespace<'a, AO, A> {
+    fn parse(&self, i: &str) -> ParseResult<&str, AO> {
         let mut rem = 0;
         for c in i.chars() {
             if !WHITESPACE_CHARS.contains(c) {
@@ -233,27 +278,27 @@ impl<A: Parser> Parser for EatPrecedingWhitespace<A> {
     }
 }
 
-pub struct IfLiteral<A: Parser>(A, String);
-
-impl<A: Parser> Parser for IfLiteral<A> {
-    type Token = Option<A::Token>;
-
-    fn parse(&self, i: &str) -> Result<(Self::Token, usize)> {
-        if i.len() < self.1.len() || i[0..self.1.len()] != self.1 {
-            Ok((None, 0))
-        } else {
-            let res = self.0.parse(&i[self.1.len()..])?;
-            Ok((Some(res.0), res.1 + self.1.len()))
-        }
-    }
-}
+//pub struct IfLiteral<A: Parser>(A, String);
+//
+//impl<A: Parser> Parser for IfLiteral<A> {
+//    type Token = Option<A::Token>;
+//
+//    fn parse(&self, i: &str) -> Result<(Self::Token, usize)> {
+//        if i.len() < self.1.len() || i[0..self.1.len()] != self.1 {
+//            Ok((None, 0))
+//        } else {
+//            let res = self.0.parse(&i[self.1.len()..])?;
+//            Ok((Some(res.0), res.1 + self.1.len()))
+//        }
+//    }
+//}
 
 #[cfg(test)]
 mod tests {
     use crate::parser::*;
 
     #[test]
-    fn int() -> Result<()> {
+    fn int() -> Result<(), ()> {
         assert_eq!(NaturalNumber.parse("123")?, (Token::Number(123.), 3));
         assert_eq!(NaturalNumber.parse("-123")?.0, Token::Blank);
         assert_eq!(Integer.parse("-123")?, (Token::Number(-123.), 4));
@@ -263,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn symbol() -> Result<()> {
+    fn symbol() -> Result<(), ()> {
         assert_eq!(
             Symbol.parse("_oki123")?,
             (Token::Symbol("_oki123".to_string()), 7)
@@ -273,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn op() -> Result<()> {
+    fn op() -> Result<(), ()> {
         assert_eq!(
             Operator.parse("+=")?,
             (Token::Operator("+=".to_string()), 2)
@@ -282,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn num_then_symbol() -> Result<()> {
+    fn num_then_symbol() -> Result<(), ()> {
         assert_eq!(
             Then(Integer, Symbol).parse("123abc")?,
             ((Token::Number(123.), Token::Symbol("abc".to_string())), 6)
@@ -292,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn symbol_then_num() -> Result<()> {
+    fn symbol_then_num() -> Result<(), ()> {
         assert_eq!(
             Symbol.then(Integer.after_whitespace()).parse("abc 123")?,
             ((Token::Symbol("abc".to_string()), Token::Number(123.)), 7)
@@ -302,25 +347,25 @@ mod tests {
     }
 
     #[test]
-    fn sep() -> Result<()> {
+    fn sep() -> Result<(), ()> {
         assert_eq!(Separator.parse("(())")?, (Token::Separator('('), 1));
         Ok(())
     }
 
-    #[test]
-    fn oneline_float_parser() -> Result<()> {
-        let float = Integer.then(NaturalNumber.if_literal("."));
+    //#[test]
+    //fn oneline_float_parser() -> Result<()> {
+    //    let float = Integer.then(NaturalNumber.if_literal("."));
 
-        assert_eq!(float.parse("123")?, ((Token::Number(123.), None), 3));
-        assert_eq!(
-            float.parse("-123.456")?,
-            ((Token::Number(-123.), Some(Token::Number(456.))), 8)
-        );
-        Ok(())
-    }
+    //    assert_eq!(float.parse("123")?, ((Token::Number(123.), None), 3));
+    //    assert_eq!(
+    //        float.parse("-123.456")?,
+    //        ((Token::Number(-123.), Some(Token::Number(456.))), 8)
+    //    );
+    //    Ok(())
+    //}
 
     #[test]
-    fn floats() -> Result<()> {
+    fn floats() -> Result<(), ()> {
         assert_eq!(Float.parse("-123.456")?, (Token::Number(-123.456), 8));
         assert_eq!(Float.parse("123")?, (Token::Number(123.), 3));
         assert_eq!(Float.parse("123.")?, (Token::Number(123.), 3));
